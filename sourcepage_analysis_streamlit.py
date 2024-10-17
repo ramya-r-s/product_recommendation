@@ -1,13 +1,37 @@
 import pandas as pd
 import streamlit as st
+import requests
 
 # Set maximum cells for Pandas Styler rendering
 pd.set_option("styler.render.max_elements", 500000)  # Set to a high value
 
-source_df = pd.read_csv('source_pdpview_df.csv')
+# Function to fetch CSV from GitHub
+def fetch_csv_from_github(url):
+    try:
+        return pd.read_csv(url, sep=",", on_bad_lines='skip')  # Skip bad lines and set the correct delimiter
+    except pd.errors.ParserError as e:
+        st.error(f"ParserError: {e}")
+        return None
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
+        return None
 
+# Add file uploader
+st.sidebar.header("Upload CSV or Use Default Data")
+uploaded_file = st.sidebar.file_uploader("Upload your CSV file", type="csv")
+default_url = "https://raw.githubusercontent.com/ramya-r-s/product_recommendation/main/source_pdpview_df.csv"  # corrected URL for raw file access
 
-
+# Load CSV from uploaded file or GitHub
+if uploaded_file is not None:
+    source_df = pd.read_csv(uploaded_file)
+    st.sidebar.success("CSV file uploaded successfully!")
+else:
+    source_df = fetch_csv_from_github(default_url)
+    if source_df is not None:
+        st.sidebar.warning("Using default CSV from GitHub")
+    else:
+        st.error("Failed to load data from the provided source.")
+        st.stop()  # Stop execution if data could not be loaded
 
 # Replace 0 ranks with max rank + 1
 def replace_0_with_max_rank(df, rank_column, max_rank):
@@ -17,8 +41,6 @@ def replace_0_with_max_rank(df, rank_column, max_rank):
 # Function to calculate percentage difference
 def percentage_diff(val1, val2, threshold=100):
     return (abs(val1 - val2) / threshold) * 100
-
-
 
 # Sidebar for filters
 st.sidebar.header("Filter Options")
@@ -36,26 +58,16 @@ top_rank = st.sidebar.number_input("Filter Top Ranks by", min_value=1, max_value
 # Sorting options
 sort_column = st.sidebar.selectbox("Sort by column", options=["fb_rank", "google_rank", "insta_rank", "cl_rank", "fb_views", "google_views", "insta_views", "cl_views"])
 sort_order = st.sidebar.selectbox("Sort order", options=["Ascending", "Descending"])
-ascending_order = True if sort_order == "Ascending" else False
+ascending_order = sort_order == "Ascending"
 
 # Filter the source_df based on the selected category
-if selected_category != "All":
-    filtered_df = source_df[source_df['category'] == selected_category]
-else:
-    filtered_df = source_df.copy()
+filtered_df = source_df[source_df['category'] == selected_category] if selected_category != "All" else source_df.copy()
 
 # Create source-based DataFrames
-fb_df = filtered_df[filtered_df['session_utm_source'].str.lower() == 'facebook'].copy()
-fb_df = fb_df.groupby(['sku', 'session_utm_source'], as_index=False)['view_count'].sum()
-
-google_df = filtered_df[filtered_df['session_utm_source'].str.lower() == 'google'].copy()
-google_df = google_df.groupby(['sku', 'session_utm_source'], as_index=False)['view_count'].sum()
-
-insta_df = filtered_df[filtered_df['session_utm_source'].str.lower() == 'instagram'].copy()
-insta_df = insta_df.groupby(['sku', 'session_utm_source'], as_index=False)['view_count'].sum()
-
-cl_df = filtered_df[filtered_df['session_utm_source'].str.lower() == 'caratlane'].copy()
-cl_df = cl_df.groupby(['sku', 'session_utm_source'], as_index=False)['view_count'].sum()
+fb_df = filtered_df[filtered_df['session_utm_source'].str.lower() == 'facebook'].groupby(['sku', 'session_utm_source'], as_index=False)['view_count'].sum()
+google_df = filtered_df[filtered_df['session_utm_source'].str.lower() == 'google'].groupby(['sku', 'session_utm_source'], as_index=False)['view_count'].sum()
+insta_df = filtered_df[filtered_df['session_utm_source'].str.lower() == 'instagram'].groupby(['sku', 'session_utm_source'], as_index=False)['view_count'].sum()
+cl_df = filtered_df[filtered_df['session_utm_source'].str.lower() == 'caratlane'].groupby(['sku', 'session_utm_source'], as_index=False)['view_count'].sum()
 
 # Rank by 'view_count'
 fb_df['fb_rank'] = fb_df['view_count'].rank(method='dense', ascending=False)
@@ -76,17 +88,13 @@ insta_df.rename(columns={'view_count': 'insta_views'}, inplace=True)
 cl_df.rename(columns={'view_count': 'cl_views'}, inplace=True)
 
 # Merge the dataframes
-merged_df = pd.merge(fb_df[['sku', 'fb_views', 'fb_rank']],
-                     google_df[['sku', 'google_views', 'google_rank']],
-                     on='sku', how='outer')
-
-merged_df = pd.merge(merged_df,
-                     insta_df[['sku', 'insta_views', 'insta_rank']],
-                     on='sku', how='outer')
-
-merged_df = pd.merge(merged_df,
-                     cl_df[['sku', 'cl_views', 'cl_rank']],
-                     on='sku', how='outer')
+merged_df = fb_df[['sku', 'fb_views', 'fb_rank']].merge(
+    google_df[['sku', 'google_views', 'google_rank']], on='sku', how='outer'
+).merge(
+    insta_df[['sku', 'insta_views', 'insta_rank']], on='sku', how='outer'
+).merge(
+    cl_df[['sku', 'cl_views', 'cl_rank']], on='sku', how='outer'
+)
 
 # Sort by selected column and order
 merged_df = merged_df.sort_values(by=sort_column, ascending=ascending_order).reset_index(drop=True)
@@ -100,12 +108,11 @@ merged_df = merged_df[
 ]
 
 # Fill NaN values with 0 and replace 0 ranks with max rank + 1
-merged_df = merged_df.fillna(0)
-merged_df = replace_0_with_max_rank(merged_df, 'fb_rank', fb_max_rank)
-merged_df = replace_0_with_max_rank(merged_df, 'google_rank', google_max_rank)
-merged_df = replace_0_with_max_rank(merged_df, 'insta_rank', insta_max_rank)
-merged_df = replace_0_with_max_rank(merged_df, 'cl_rank', cl_max_rank)
-
+merged_df.fillna(0, inplace=True)
+replace_0_with_max_rank(merged_df, 'fb_rank', fb_max_rank)
+replace_0_with_max_rank(merged_df, 'google_rank', google_max_rank)
+replace_0_with_max_rank(merged_df, 'insta_rank', insta_max_rank)
+replace_0_with_max_rank(merged_df, 'cl_rank', cl_max_rank)
 
 # Calculate percentage differences for alignment
 merged_df['fb_google_diff'] = merged_df.apply(lambda row: percentage_diff(row['fb_rank'], row['google_rank']), axis=1)
@@ -114,19 +121,6 @@ merged_df['fb_cl_diff'] = merged_df.apply(lambda row: percentage_diff(row['fb_ra
 merged_df['google_insta_diff'] = merged_df.apply(lambda row: percentage_diff(row['google_rank'], row['insta_rank']), axis=1)
 merged_df['google_cl_diff'] = merged_df.apply(lambda row: percentage_diff(row['google_rank'], row['cl_rank']), axis=1)
 merged_df['insta_cl_diff'] = merged_df.apply(lambda row: percentage_diff(row['insta_rank'], row['cl_rank']), axis=1)
-
-# Highlighting function for top rank cells only
-def highlight_top_rank_cells(row):
-    styles = [''] * len(row)
-    if row['fb_rank'] <= top_rank:
-        styles[row.index.get_loc('fb_rank')] = 'background-color: yellow'
-    if row['google_rank'] <= top_rank:
-        styles[row.index.get_loc('google_rank')] = 'background-color: yellow'
-    if row['insta_rank'] <= top_rank:
-        styles[row.index.get_loc('insta_rank')] = 'background-color: yellow'
-    if row['cl_rank'] <= top_rank:
-        styles[row.index.get_loc('cl_rank')] = 'background-color: yellow'
-    return styles
 
 # Highlighting function for diff within threshold cells only
 def highlight_threshold_diff_cells(row):
@@ -150,7 +144,6 @@ merged_df_reset = merged_df.reset_index(drop=True)
 
 # Display the merged_df first with highlighted top rank cells
 st.write("### Merged DataFrame")
-# styled_merged_df = merged_df_reset.style.apply(highlight_top_rank_cells, axis=1).apply(highlight_threshold_diff_cells, axis=1)
 styled_merged_df = merged_df_reset.style.apply(highlight_threshold_diff_cells, axis=1)
 st.dataframe(styled_merged_df)
 
@@ -161,6 +154,8 @@ aligned_fb_cl = merged_df[merged_df['fb_cl_diff'] <= threshold]
 aligned_google_insta = merged_df[merged_df['google_insta_diff'] <= threshold]
 aligned_google_cl = merged_df[merged_df['google_cl_diff'] <= threshold]
 aligned_insta_cl = merged_df[merged_df['insta_cl_diff'] <= threshold]
+
+
 
 # Select which aligned DataFrame to display
 aligned_choice = st.sidebar.selectbox("Select aligned data to display", options=["fb_google", "fb_insta", "fb_cl", "google_insta", "google_cl", "insta_cl"])
@@ -197,12 +192,5 @@ st.write(f"Overall alignment percentage for Instagram vs CaratLane: {overall_ali
 
 # Highlight top ranks in the aligned DataFrame
 st.write(f"### Displaying aligned DataFrame: {aligned_choice}")
-# styled_align_df = aligned_df.style.apply(highlight_top_rank_cells, axis=1).apply(highlight_threshold_diff_cells, axis=1)
 styled_align_df = aligned_df.style.apply(highlight_threshold_diff_cells, axis=1)
 st.dataframe(styled_align_df)
-
-
-
-
-
-
